@@ -13,6 +13,7 @@ interface RawProperty {
   priceRaw: string;
   minPriceCr: number;
   maxPriceCr: number;
+  usp: string;
 }
 
 interface UIProperty {
@@ -46,9 +47,13 @@ interface UIProperty {
   verdictColor: string;
   completionDate: string;
   disputes: number;
+  zone: string;
+  launchStatus: string;
+  soldOut: boolean;
 }
 
 const riskLevels = ['Low', 'Medium', 'High'] as const;
+const soldOutRegex = /\bsold[\s-]?out\b|\bfully sold\b/i;
 
 const properties: UIProperty[] = (sourceProperties as RawProperty[]).map(
   (property, idx) => {
@@ -64,6 +69,8 @@ const properties: UIProperty[] = (sourceProperties as RawProperty[]).map(
     const builder = property.name.split(' ')[0];
     const bhkMatch = property.priceRaw.match(/(\d(?:\.\d)?)\s*BHK/i);
     const type = bhkMatch ? `${bhkMatch[1]}BHK Apartment` : 'Apartment';
+    const launchStatus = property.status || 'Unknown';
+    const soldOut = soldOutRegex.test(launchStatus) || soldOutRegex.test(property.usp || '');
 
     return {
       id: property.id,
@@ -109,6 +116,9 @@ const properties: UIProperty[] = (sourceProperties as RawProperty[]).map(
       verdictColor,
       completionDate: property.possession || 'TBD',
       disputes: idx % 9,
+      zone: property.zone,
+      launchStatus,
+      soldOut,
     };
   }
 );
@@ -244,8 +254,17 @@ export default function TruthEngine() {
   const [tab, setTab] = useState('overview');
   const [search, setSearch] = useState('');
   const [revealed, setRevealed] = useState(false);
+  const [inventoryView, setInventoryView] = useState<'all' | 'available' | 'sold'>('all');
   const filteredProperties = properties.filter((property) => {
     const query = search.trim().toLowerCase();
+    const inventoryMatch =
+      inventoryView === 'all'
+        ? true
+        : inventoryView === 'sold'
+          ? property.soldOut
+          : !property.soldOut;
+
+    if (!inventoryMatch) return false;
     if (!query) return true;
     return (
       property.name.toLowerCase().includes(query) ||
@@ -253,6 +272,11 @@ export default function TruthEngine() {
       property.builder.toLowerCase().includes(query)
     );
   });
+  const soldOutCount = properties.filter((property) => property.soldOut).length;
+  const availableCount = properties.length - soldOutCount;
+  const soldOutPct = ((soldOutCount / properties.length) * 100).toFixed(1);
+  const avgListedCr =
+    properties.reduce((sum, property) => sum + property.advertised, 0) / properties.length / 10000000;
 
   useEffect(() => {
     setRevealed(false);
@@ -432,6 +456,39 @@ export default function TruthEngine() {
           >
             ANALYSED PROJECTS
           </div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: 6,
+              marginBottom: 10,
+            }}
+          >
+            {[
+              { label: 'All', value: 'all' },
+              { label: 'Available', value: 'available' },
+              { label: 'Sold', value: 'sold' },
+            ].map((item) => (
+              <button
+                key={item.value}
+                onClick={() =>
+                  setInventoryView(item.value as 'all' | 'available' | 'sold')
+                }
+                style={{
+                  border: '1px solid #2a2a4a',
+                  background: inventoryView === item.value ? '#26265f' : '#11112b',
+                  color: inventoryView === item.value ? '#d9d9ff' : '#7b7bac',
+                  borderRadius: 8,
+                  padding: '6px 8px',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {filteredProperties.map((p) => (
               <div
@@ -515,6 +572,32 @@ export default function TruthEngine() {
                     {p.builderScore}/10
                   </span>
                 </div>
+                <div
+                  style={{
+                    marginTop: 8,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <span style={{ fontSize: 10, color: '#7d7dad' }}>{p.zone}</span>
+                  {p.soldOut && (
+                    <span
+                      style={{
+                        background: '#00C89622',
+                        color: '#00C896',
+                        border: '1px solid #00C89644',
+                        padding: '1px 8px',
+                        borderRadius: 99,
+                        fontSize: 9,
+                        fontWeight: 700,
+                        letterSpacing: 0.8,
+                      }}
+                    >
+                      SOLD OUT
+                    </span>
+                  )}
+                </div>
               </div>
             ))}
             {filteredProperties.length === 0 && (
@@ -587,6 +670,61 @@ export default function TruthEngine() {
 
         {/* Main panel */}
         <div style={{ opacity: revealed ? 1 : 0, transition: 'opacity 0.3s' }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+              gap: 10,
+              marginBottom: 14,
+            }}
+          >
+            {[
+              {
+                label: 'Total Inventory',
+                value: properties.length.toString(),
+                note: 'Tracked projects',
+                tone: '#7c7cf8',
+              },
+              {
+                label: 'Sold Out',
+                value: `${soldOutCount} (${soldOutPct}%)`,
+                note: 'From launch/status text',
+                tone: '#00C896',
+              },
+              {
+                label: 'Open Inventory',
+                value: availableCount.toString(),
+                note: 'Potentially investable',
+                tone: '#40a9ff',
+              },
+              {
+                label: 'Avg Listed Price',
+                value: `₹${avgListedCr.toFixed(2)} Cr`,
+                note: 'Across all properties',
+                tone: '#FFB800',
+              },
+            ].map((metric) => (
+              <div
+                key={metric.label}
+                style={{
+                  background:
+                    'linear-gradient(165deg, rgba(20,20,48,0.95) 0%, rgba(14,14,32,0.95) 100%)',
+                  border: `1px solid ${metric.tone}33`,
+                  borderRadius: 12,
+                  padding: '12px 14px',
+                }}
+              >
+                <div style={{ fontSize: 10, color: '#8282b0', letterSpacing: 1.2 }}>
+                  {metric.label.toUpperCase()}
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', margin: '4px 0' }}>
+                  {metric.value}
+                </div>
+                <div style={{ fontSize: 11, color: metric.tone }}>{metric.note}</div>
+              </div>
+            ))}
+          </div>
+
           {/* Hero verdict bar */}
           <div
             style={{
@@ -631,6 +769,9 @@ export default function TruthEngine() {
               </div>
               <div style={{ fontSize: 13, color: '#6a6a9a' }}>
                 {selected.builder} · {selected.location} · {selected.type}
+              </div>
+              <div style={{ fontSize: 11, color: '#8d8dbf', marginTop: 6 }}>
+                Launch Status: {selected.launchStatus}
               </div>
             </div>
             <div style={{ textAlign: 'center' }}>
